@@ -6,7 +6,7 @@
 
 #define CAMERA_MODEL_XIAO_ESP32S3 // Has PSRAM
 
-#define PHOTO_TO_CAPTURE 1
+#define PHOTO_TO_CAPTURE 5
 
 #include "camera_pins.h"
 
@@ -18,7 +18,7 @@ bool sd_sign = false;              // Check sd status
 void writeFile(fs::FS &fs, const char * path, uint8_t * data, size_t len);
 
 // Save pictures to SD card
-void photo_save() 
+void photo_save(const char* fileName) 
 {
     // Take a photo
     camera_fb_t *fb = esp_camera_fb_get();
@@ -27,8 +27,9 @@ void photo_save()
         Serial.println("Failed to get camera frame buffer");
         return;
     }
+
     // Save photo to file
-    writeFile(SD, "/tttttt.jpg", fb->buf, fb->len);
+    writeFile(SD, fileName, fb->buf, fb->len);
     // Release image buffer
     esp_camera_fb_return(fb);
     Serial.println("Photo saved to file");
@@ -166,19 +167,27 @@ void setup()
 
     delay(2000);
 
-    // for(int i = 0 ; i < PHOTO_TO_CAPTURE ; i++)
-    // {
+    for(int i = 0 ; i <= PHOTO_TO_CAPTURE ; i++)
+    {
         // Camera & SD available, start taking pictures
         if(camera_sign && sd_sign)
         {
             // Get the current time
             unsigned long now = millis();
-            photo_save();
+            int photoCount = 0;
+            char fileName[32] = "/Photo0.jpg";
+            while(SD.exists(fileName))
+            {
+                photoCount++;
+                sprintf(fileName,"/Photo%d.jpg",photoCount);
+            }
+            photo_save(fileName);
         }
-    // }
+        delay(10);
+    }
 }
 
 void loop() 
 {
-    
+    delay(360000);
 }
