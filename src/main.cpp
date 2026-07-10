@@ -1,105 +1,59 @@
-#include <WiFi.h>
-#include <HTTPClient.h>
-#include <SD_MMC.h>
-#include <esp_camera.h>
+#include "Arduino.h"
+#include "esp_camera.h"
+#include "FS.h"
+#include "SD.h"
+#include "SPI.h"
 
-// WiFi credentials
-const char* kWiFiSsid = "LognSteam";
-const char* kWiFiPassword = "roboticsisfun!";
+#define CAMERA_MODEL_XIAO_ESP32S3 // Has PSRAM
 
-// REST endpoint for posting JSON payloads
-const char* kPostUrl = "https://script.google.com/macros/s/AKfycbxoq4EkIb7f6GZVewrn-mSUFbtDmdHMZDknfIcomaxGKW3J3ULM_0GvvbNN824VHbABJA/exec";
+#include "camera_pins.h"
 
-// Save directory on SD card
-const char* kPhotoDirectory = "/photos";
+unsigned long lastCaptureTime = 0; // Last shooting time
+int imageCount = 1;                // File Counter
+bool camera_sign = false;          // Check camera status
+bool sd_sign = false;              // Check sd status
 
-// Camera pin definitions for ESP32-S3 boards; adjust for your hardware
-#define PWDN_GPIO_NUM     -1
-#define RESET_GPIO_NUM    -1
-#define XCLK_GPIO_NUM      8
-#define SIOD_GPIO_NUM     11
-#define SIOC_GPIO_NUM     12
-#define Y9_GPIO_NUM       19
-#define Y8_GPIO_NUM       18
-#define Y7_GPIO_NUM       17
-#define Y6_GPIO_NUM       16
-#define Y5_GPIO_NUM       15
-#define Y4_GPIO_NUM       14
-#define Y3_GPIO_NUM       13
-#define Y2_GPIO_NUM       20
-#define VSYNC_GPIO_NUM    22
-#define HREF_GPIO_NUM     21
-#define PCLK_GPIO_NUM     23
+void writeFile(fs::FS &fs, const char * path, uint8_t * data, size_t len);
 
-bool hasCapturedPhoto = false;
+// Save pictures to SD card
+void photo_save(const char * fileName) {
+  // Take a photo
+  camera_fb_t *fb = esp_camera_fb_get();
+  if (!fb) {
+    Serial.println("Failed to get camera frame buffer");
+    return;
+  }
+  // Save photo to file
+  writeFile(SD, fileName, fb->buf, fb->len);
+  
+  // Release image buffer
+  esp_camera_fb_return(fb);
 
-String base64Encode(const uint8_t* data, size_t length) {
-  static const char kBase64Alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  String encoded;
-  encoded.reserve(((length + 2) / 3) * 4);
+  Serial.println("Photo saved to file");
+}
 
-  for (size_t i = 0; i < length; i += 3) {
-    uint32_t value = 0;
-    int bytes = 0;
+// SD card write file
+void writeFile(fs::FS &fs, const char * path, uint8_t * data, size_t len){
+    Serial.printf("Writing file: %s\n", path);
 
-    for (int j = 0; j < 3; ++j) {
-      value <<= 8;
-      if (i + j < length) {
-        value |= data[i + j];
-        ++bytes;
-      }
+    File file = fs.open(path, FILE_WRITE);
+    if(!file){
+        Serial.println("Failed to open file for writing");
+        return;
     }
-
-    encoded += kBase64Alphabet[(value >> 18) & 0x3F];
-    encoded += kBase64Alphabet[(value >> 12) & 0x3F];
-    encoded += (bytes > 1) ? kBase64Alphabet[(value >> 6) & 0x3F] : '=';
-    encoded += (bytes > 2) ? kBase64Alphabet[value & 0x3F] : '=';
-  }
-
-  return encoded;
-}
-
-bool initWiFi() {
-  Serial.printf("Connecting to WiFi '%s'...\n", kWiFiSsid);
-  WiFi.begin(kWiFiSsid, kWiFiPassword);
-
-  unsigned long start = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - start < 20000) {
-    delay(500);
-    Serial.print('.');
-  }
-
-  Serial.println();
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.printf("WiFi connected, IP: %s\n", WiFi.localIP().toString().c_str());
-    return true;
-  }
-
-  Serial.println("Failed to connect to WiFi");
-  return false;
-}
-
-bool initSDCard() {
-  Serial.println("Initializing SD card...");
-  if (!SD_MMC.begin()) {
-    Serial.println("SD_MMC.begin() failed");
-    return false;
-  }
-
-  if (!SD_MMC.exists(kPhotoDirectory)) {
-    Serial.printf("Creating directory %s\n", kPhotoDirectory);
-    if (!SD_MMC.mkdir(kPhotoDirectory)) {
-      Serial.println("Failed to create photo directory");
-      return false;
+    if(file.write(data, len) == len){
+        Serial.println("File written");
+    } else {
+        Serial.println("Write failed");
     }
-  }
-
-  uint64_t cardSize = SD_MMC.cardSize() >> 20;
-  Serial.printf("SD card mounted, size: %llu MB\n", cardSize);
-  return true;
+    file.close();
 }
 
-bool initCamera() {
+void setup() {
+  Serial.begin(115200);
+  while(!Serial)
+    {delay(100);} // When the serial monitor is turned on, the program starts to execute
+
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
   config.ledc_timer = LEDC_TIMER_0;
@@ -120,194 +74,86 @@ bool initCamera() {
   config.pin_pwdn = PWDN_GPIO_NUM;
   config.pin_reset = RESET_GPIO_NUM;
   config.xclk_freq_hz = 20000000;
-  config.pixel_format = PIXFORMAT_JPEG;
-  config.frame_size = FRAMESIZE_SVGA;
+  config.frame_size = FRAMESIZE_UXGA;
+  config.pixel_format = PIXFORMAT_JPEG; // for streaming
+  config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
+  config.fb_location = CAMERA_FB_IN_PSRAM;
   config.jpeg_quality = 12;
   config.fb_count = 1;
-  config.grab_mode = CAMERA_GRAB_LATEST;
+  
+  // if PSRAM IC present, init with UXGA resolution and higher JPEG quality
+  //                      for larger pre-allocated frame buffer.
+  if(config.pixel_format == PIXFORMAT_JPEG){
+    if(psramFound()){
+      config.jpeg_quality = 10;
+      config.fb_count = 2;
+      config.grab_mode = CAMERA_GRAB_LATEST;
+    } else {
+      // Limit the frame size when PSRAM is not available
+      config.frame_size = FRAMESIZE_SVGA;
+      config.fb_location = CAMERA_FB_IN_DRAM;
+    }
+  } else {
+    // Best option for face detection/recognition
+    config.frame_size = FRAMESIZE_240X240;
+#if CONFIG_IDF_TARGET_ESP32S3
+    config.fb_count = 2;
+#endif
+  }
 
+  // camera init
   esp_err_t err = esp_camera_init(&config);
   if (err != ESP_OK) {
-    Serial.printf("Camera init failed with error 0x%x\n", err);
-    return false;
+    Serial.printf("Camera init failed with error 0x%x", err);
+    return;
+  }
+  
+  camera_sign = true; // Camera initialization check passes
+
+  // Initialize SD card
+  if(!SD.begin(21)){
+    Serial.println("Card Mount Failed");
+    return;
+  }
+  uint8_t cardType = SD.cardType();
+
+  // Determine if the type of SD card is available
+  if(cardType == CARD_NONE){
+    Serial.println("No SD card attached");
+    return;
   }
 
-  sensor_t* s = esp_camera_sensor_get();
-  if (s) {
-    s->set_framesize(s, FRAMESIZE_SVGA);
-  }
-
-  Serial.println("Camera initialized successfully");
-  return true;
-}
-
-String makePhotoPath() {
-  unsigned long timestamp = millis();
-  return String(kPhotoDirectory) + "/photo_" + String(timestamp) + ".jpg";
-}
-
-bool captureAndSavePhoto() {
-  camera_fb_t* fb = esp_camera_fb_get();
-  if (!fb) {
-    Serial.println("Camera capture failed");
-    return false;
-  }
-
-  String path = makePhotoPath();
-  File file = SD_MMC.open(path.c_str(), FILE_WRITE);
-  if (!file) {
-    Serial.printf("Failed to open file for writing: %s\n", path.c_str());
-    esp_camera_fb_return(fb);
-    return false;
-  }
-
-  size_t written = file.write(fb->buf, fb->len);
-  file.close();
-  esp_camera_fb_return(fb);
-
-  if (written != fb->len) {
-    Serial.printf("Failed to write complete file. expected=%u written=%u\n", fb->len, written);
-    SD_MMC.remove(path.c_str());
-    return false;
-  }
-
-  Serial.printf("Photo saved to SD: %s (%u bytes)\n", path.c_str(), fb->len);
-  return true;
-}
-
-String findNewPhotoFile() {
-  File dir = SD_MMC.open(kPhotoDirectory);
-  if (!dir || !dir.isDirectory()) {
-    if (dir) dir.close();
-    return "";
-  }
-
-  File entry = dir.openNextFile();
-  while (entry) {
-    if (!entry.isDirectory()) {
-      String name = String(entry.name());
-      if (name.endsWith(".jpg") || name.endsWith(".jpeg")) {
-        entry.close();
-        dir.close();
-        if (name.startsWith("/")) {
-          return name;
-        }
-        return String(kPhotoDirectory) + "/" + name;
-      }
-    }
-    entry.close();
-    entry = dir.openNextFile();
-  }
-
-  dir.close();
-  return "";
-}
-
-bool postFileToServer(const String& filePath) {
-  File file = SD_MMC.open(filePath.c_str(), FILE_READ);
-  if (!file) {
-    Serial.printf("Failed to open file for POST: %s\n", filePath.c_str());
-    return false;
-  }
-
-  size_t fileSize = file.size();
-  if (fileSize == 0) {
-    Serial.println("File is empty, skipping POST");
-    file.close();
-    return false;
-  }
-
-  uint8_t* buffer = new uint8_t[fileSize];
-  size_t readBytes = file.read(buffer, fileSize);
-  file.close();
-
-  if (readBytes != fileSize) {
-    Serial.println("Failed to read image data from file");
-    delete[] buffer;
-    return false;
-  }
-
-  String payload = "{\"filename\":\"" + filePath + "\",\"image\":\"";
-  payload += base64Encode(buffer, fileSize);
-  payload += "\"}";
-  delete[] buffer;
-
-  HTTPClient http;
-  http.begin(kPostUrl);
-  http.addHeader("Content-Type", "application/json");
-
-  Serial.printf("Posting %u bytes to %s\n", payload.length(), kPostUrl);
-  int httpCode = http.POST(payload);
-  String response;
-  if (httpCode > 0) {
-    response = http.getString();
-    Serial.printf("HTTP %d response: %s\n", httpCode, response.c_str());
+  Serial.print("SD Card Type: ");
+  if(cardType == CARD_MMC){
+    Serial.println("MMC");
+  } else if(cardType == CARD_SD){
+    Serial.println("SDSC");
+  } else if(cardType == CARD_SDHC){
+    Serial.println("SDHC");
   } else {
-    Serial.printf("HTTP POST failed, error: %s\n", http.errorToString(httpCode).c_str());
+    Serial.println("UNKNOWN");
   }
 
-  http.end();
+  sd_sign = true; // sd initialization check passes
 
-  if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_CREATED || httpCode == HTTP_CODE_ACCEPTED) {
-    Serial.println("POST successful, deleting local file");
-    return SD_MMC.remove(filePath.c_str());
-  }
-
-  Serial.println("POST failed, keeping file on SD for retry");
-  return false;
-}
-
-void setup() {
-  Serial.begin(115200);
-  while(!Serial)
-    {delay(10);}
-
-  if (!initCamera()) {
-    Serial.println("Camera initialization failed. Halting.");
-    while (true) {
-      delay(1000);
-    }
-  }
-
-  if (!initSDCard()) {
-    Serial.println("SD card initialization failed. Halting.");
-    while (true) {
-      delay(1000);
-    }
-  }
-
-  if (!initWiFi()) {
-    Serial.println("WiFi not connected. Will continue running and retry on loop.");
-  }
-
-  if (captureAndSavePhoto()) {
-    hasCapturedPhoto = true;
-  }
+  Serial.println("Photos will begin in one minute, please be ready.");
 }
 
 void loop() {
-  if (!hasCapturedPhoto) {
-    if (captureAndSavePhoto()) {
-      hasCapturedPhoto = true;
-    } else {
-      delay(5000);
-      return;
+  // Camera & SD available, start taking pictures
+  if(camera_sign && sd_sign){
+    // Get the current time
+    unsigned long now = millis();
+  
+    //If it has been more than 1 minute since the last shot, take a picture and save it to the SD card
+    if ((now - lastCaptureTime) >= 60000) {
+      char filename[32];
+      sprintf(filename, "/image%d.jpg", imageCount);
+      photo_save(filename);
+      Serial.printf("Saved picture：%s\n", filename);
+      Serial.println("Photos will begin in one minute, please be ready.");
+      imageCount++;
+      lastCaptureTime = now;
     }
   }
-
-  if (WiFi.status() != WL_CONNECTED) {
-    initWiFi();
-  }
-
-  if (WiFi.status() == WL_CONNECTED) {
-    String photoFile = findNewPhotoFile();
-    if (photoFile.length() > 0) {
-      Serial.printf("Found new photo file: %s\n", photoFile.c_str());
-      if (postFileToServer(photoFile)) {
-        Serial.printf("Deleted %s after successful upload\n", photoFile.c_str());
-      }
-    }
-  }
-
-  delay(10000);
 }
