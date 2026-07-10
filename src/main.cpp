@@ -1,18 +1,9 @@
-#include <Arduino.h>
+// [Save Task]
+// 1. Capture a picture when started
+// 2. Save the pictrue to SD
 
-// put function declarations here:
-int myFunction(int, int);
-
-void setup() {
-  // put your setup code here, to run once:
-  int result = myFunction(2, 3);
-}
-
-void loop() {
-  // put your main code here, to run repeatedly:
-}
-
-// put function definitions here:
-int myFunction(int x, int y) {
-  return x + y;
-}
+// [Post Task]
+// 1. If there is new file in SD then Base64encode
+// 2. JSON Stringify
+// 3. Post RestAPI to website [link : https://script.google.com/macros/s/AKfycbxoq4EkIb7f6GZVewrn-mSUFbtDmdHMZDknfIcomaxGKW3J3ULM_0GvvbNN824VHbABJA/exec]
+// 4. Delete SD File
