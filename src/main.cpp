@@ -26,7 +26,7 @@ const char* kPhotoDirectory = "/photos";
 #define Y5_GPIO_NUM       15
 #define Y4_GPIO_NUM       14
 #define Y3_GPIO_NUM       13
-#define Y2_GPIO_NUM      20
+#define Y2_GPIO_NUM       20
 #define VSYNC_GPIO_NUM    22
 #define HREF_GPIO_NUM     21
 #define PCLK_GPIO_NUM     23
@@ -259,7 +259,8 @@ bool postFileToServer(const String& filePath) {
 
 void setup() {
   Serial.begin(115200);
-  delay(1000);
+  while(!Serial)
+    {delay(10);}
 
   if (!initCamera()) {
     Serial.println("Camera initialization failed. Halting.");
