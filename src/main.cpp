@@ -20,9 +20,11 @@
 
 esp_err_t cameraInit();
 esp_err_t sdInit();
+esp_err_t wifiInit();
 void photo_save(const char* fileName);
 void writeFile(fs::FS &fs, const char * path, uint8_t * data, size_t len);
-void wifiPostImageTask();
+void cameraCaptureTask(void *pvParameters);
+void wifiPostImageTask(void* pvParameters);
 
 esp_err_t cameraInit()
 {
@@ -121,16 +123,21 @@ esp_err_t sdInit()
     return ESP_OK;
 }
 
+esp_err_t wifiInit()
+{
+    return ESP_OK;
+}
+
 // Save pictures to SD card
 void photo_save(const char* fileName) 
 {
-    // Take a photo
     camera_fb_t *fb = esp_camera_fb_get();
-    if (!fb) 
+    while(!fb)
     {
         printDebug("Failed to get camera frame buffer");
-        return;
-    }
+        delay(100);
+        fb = esp_camera_fb_get();
+    }  
 
     // Save photo to file
     writeFile(SD, fileName, fb->buf, fb->len);
@@ -140,7 +147,7 @@ void photo_save(const char* fileName)
 }
 
 // SD card write file
-void writeFile(fs::FS &fs, const char * path, uint8_t * data, size_t len)
+void writeFile(fs::FS &fs, const char *path, uint8_t *data, size_t len)
 {
     printDebug("Writing file: ");
     printDebug(path);
@@ -184,10 +191,22 @@ void setup()
         return;
     }
 
-    printDebug("Photos will begin in one minute, please be ready.");
+    xTaskCreate(cameraCaptureTask, "cameraCaptureTask", 4096, NULL, 1, NULL);
 
-    delay(2000);
+    if(wifiInit() != ESP_OK)
+    {
+        printDebug("Failed to initialize WiFi");
+        return;
+    }
 
+
+    xTaskCreate(wifiPostImageTask, "wifiPostImageTask", 4096, NULL, 1, NULL);
+}
+
+void cameraCaptureTask(void *pvParameters)
+{
+    printDebug("Camera Capture Task Started");
+    // Capture photos and save to SD card
     for(int i = 0 ; i <= PHOTO_TO_CAPTURE ; i++)
     {
         // Get the current time
@@ -202,13 +221,12 @@ void setup()
         photo_save(fileName);
         delay(10);
     }
-
-    xTaskCreate(wifiPostImageTask, "wifiPostImageTask", 4096, NULL, 1, NULL);
+    vTaskDelete(NULL);
 }
 
-void wifiPostImageTask()
+void wifiPostImageTask(void* pvParameters)
 {
-    
+    printDebug("WiFi Post Image Task Started");
     SD.end();
     // TODO : send digital signal to STM32 to indicate that the photos have been taken and saved to SD card
     esp_deep_sleep_start();
