@@ -9,6 +9,13 @@
 
 #define PHOTO_TO_CAPTURE 5
 
+#define _DEBUG_
+#ifdef _DEBUG_
+    #define printDebug(x) Serial.print(x)
+#else
+    #define printDebug(x) 
+#endif
+
 #include "camera_pins.h"
 
 esp_err_t cameraInit();
@@ -81,7 +88,7 @@ void sdInit()
     // Initialize SD card
     if(!SD.begin(21))
     {
-        Serial.println("Card Mount Failed");
+        printDebug("Card Mount Failed");
         return;
     }
     uint8_t cardType = SD.cardType();
@@ -89,26 +96,26 @@ void sdInit()
     // Determine if the type of SD card is available
     if(cardType == CARD_NONE)
     {
-        Serial.println("No SD card attached");
+        printDebug("No SD card attached");
         return;
     }
 
-    Serial.print("SD Card Type: ");
+    printDebug("SD Card Type: ");
     if(cardType == CARD_MMC)
     {
-        Serial.println("MMC");
+        printDebug("MMC");
     } 
     else if(cardType == CARD_SD)
     {
-        Serial.println("SDSC");
+        printDebug("SDSC");
     } 
     else if(cardType == CARD_SDHC)
     {
-        Serial.println("SDHC");
+        printDebug("SDHC");
     } 
     else 
     {
-        Serial.println("UNKNOWN");
+        printDebug("UNKNOWN");
     }
 
 }
@@ -120,7 +127,7 @@ void photo_save(const char* fileName)
     camera_fb_t *fb = esp_camera_fb_get();
     if (!fb) 
     {
-        Serial.println("Failed to get camera frame buffer");
+        printDebug("Failed to get camera frame buffer");
         return;
     }
 
@@ -128,48 +135,52 @@ void photo_save(const char* fileName)
     writeFile(SD, fileName, fb->buf, fb->len);
     // Release image buffer
     esp_camera_fb_return(fb);
-    Serial.println("Photo saved to file");
+    printDebug("Photo saved to file");
 }
 
 // SD card write file
 void writeFile(fs::FS &fs, const char * path, uint8_t * data, size_t len)
 {
-    Serial.printf("Writing file: %s\n", path);
+    printDebug("Writing file: ");
+    printDebug(path);
+    printDebug("\n");
 
     File file = fs.open(path, FILE_WRITE);
     if(!file)
     {
-        Serial.println("Failed to open file for writing");
+        printDebug("Failed to open file for writing");
         return;
     }
     if(file.write(data, len) == len)
     {
-        Serial.println("File written");
+        printDebug("File written");
     } 
     else 
     {
-        Serial.println("Write failed");
+        printDebug("Write failed");
     }
     file.close();
 }
 
 void setup() 
 {
+    #ifdef _DEBUG_
     Serial.begin(115200);
     while(!Serial)
         {delay(100);} // When the serial monitor is turned on, the program starts to execute
+    #endif
 
-    Serial.println("SETUP METHOD");
+    printDebug("SETUP METHOD");
 
     if(cameraInit() != ESP_OK)
     {
-        Serial.println("Failed to initialize camera");
+        printDebug("Failed to initialize camera");
         return;
     }
 
     sdInit();
 
-    Serial.println("Photos will begin in one minute, please be ready.");
+    printDebug("Photos will begin in one minute, please be ready.");
 
     delay(2000);
 
