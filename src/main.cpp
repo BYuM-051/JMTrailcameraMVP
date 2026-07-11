@@ -1,4 +1,5 @@
 #include "Arduino.h"
+#include "Freertos.h"
 #include "esp_camera.h"
 #include "FS.h"
 #include "SD.h"
@@ -16,6 +17,7 @@ bool camera_sign = false;          // Check camera status
 bool sd_sign = false;              // Check sd status
 
 void writeFile(fs::FS &fs, const char * path, uint8_t * data, size_t len);
+void wifiPostImageTask();
 
 // Save pictures to SD card
 void photo_save(const char* fileName) 
@@ -185,6 +187,16 @@ void setup()
         }
         delay(10);
     }
+
+    xTaskCreate(wifiPostImageTask, "wifiPostImageTask", 4096, NULL, 1, NULL);
+}
+
+void wifiPostImageTask()
+{
+    
+    SD.end();
+    // TODO : send digital signal to STM32 to indicate that the photos have been taken and saved to SD card
+    esp_deep_sleep_start();
 }
 
 void loop() 
