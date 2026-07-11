@@ -19,7 +19,7 @@
 #include "camera_pins.h"
 
 esp_err_t cameraInit();
-void sdInit();
+esp_err_t sdInit();
 void photo_save(const char* fileName);
 void writeFile(fs::FS &fs, const char * path, uint8_t * data, size_t len);
 void wifiPostImageTask();
