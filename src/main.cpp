@@ -83,13 +83,13 @@ esp_err_t cameraInit()
     return esp_camera_init(&config);
 }
 
-void sdInit()
+esp_err_t sdInit()
 {
     // Initialize SD card
     if(!SD.begin(21))
     {
         printDebug("Card Mount Failed");
-        return;
+        return ESP_FAIL;
     }
     uint8_t cardType = SD.cardType();
 
@@ -97,7 +97,7 @@ void sdInit()
     if(cardType == CARD_NONE)
     {
         printDebug("No SD card attached");
-        return;
+        return ESP_FAIL;
     }
 
     printDebug("SD Card Type: ");
@@ -116,8 +116,9 @@ void sdInit()
     else 
     {
         printDebug("UNKNOWN");
+        return ESP_FAIL;
     }
-
+    return ESP_OK;
 }
 
 // Save pictures to SD card
@@ -177,8 +178,11 @@ void setup()
         printDebug("Failed to initialize camera");
         return;
     }
-
-    sdInit();
+    if(sdInit() != ESP_OK)
+    {
+        printDebug("Failed to initialize SD card");
+        return;
+    }
 
     printDebug("Photos will begin in one minute, please be ready.");
 
