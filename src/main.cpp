@@ -1,18 +1,28 @@
 #include "Arduino.h"
+#include "ArduinoJson.h"
 #include "Freertos.h"
 #include "esp_camera.h"
 #include "FS.h"
 #include "SD.h"
 #include "SPI.h"
+#include "WiFi.h"
 
 #define CAMERA_MODEL_XIAO_ESP32S3 // Has PSRAM
 
 #define PHOTO_TO_CAPTURE 5
 
+constexpr const char* wifiSSID = "LognSteam";
+constexpr const char* wifiPassword = "roboticsisfun!1";
+
+constexpr const char* postURL = "https://script.google.com/macros/s/AKfycbxoq4EkIb7f6GZVewrn-mSUFbtDmdHMZDknfIcomaxGKW3J3ULM_0GvvbNN824VHbABJA/exec";
+
 #define _DEBUG_
 #ifdef _DEBUG_
+    #define uartBegin(x) Serial.begin(x); \
+        while(!Serial) {delay(100);}
     #define printDebug(x) Serial.print(x)
 #else
+    #define uartBegin(x)
     #define printDebug(x) 
 #endif
 
@@ -123,8 +133,23 @@ esp_err_t sdInit()
     return ESP_OK;
 }
 
+constexpr int wifiMaxRetries = 20;
 esp_err_t wifiInit()
 {
+    WiFi.begin(wifiSSID, wifiPassword);
+    printDebug("Connecting to WiFi");
+    int retryCount = 0;
+    while(WiFi.status() != WL_CONNECTED)
+    {
+        delay(500);
+        printDebug(".");
+        if(retryCount++ > wifiMaxRetries)
+        {
+            printDebug("Failed to connect to WiFi");
+            return ESP_FAIL;
+        }
+    }
+    printDebug("Connected to WiFi");
     return ESP_OK;
 }
 
@@ -172,12 +197,7 @@ void writeFile(fs::FS &fs, const char *path, uint8_t *data, size_t len)
 
 void setup() 
 {
-    #ifdef _DEBUG_
-    Serial.begin(115200);
-    while(!Serial)
-        {delay(100);} // When the serial monitor is turned on, the program starts to execute
-    #endif
-
+    uartBegin(115200);
     printDebug("SETUP METHOD");
 
     if(cameraInit() != ESP_OK)
@@ -198,7 +218,6 @@ void setup()
         printDebug("Failed to initialize WiFi");
         return;
     }
-
 
     xTaskCreate(wifiPostImageTask, "wifiPostImageTask", 4096, NULL, 1, NULL);
 }
@@ -227,6 +246,8 @@ void cameraCaptureTask(void *pvParameters)
 void wifiPostImageTask(void* pvParameters)
 {
     printDebug("WiFi Post Image Task Started");
+
+    
     SD.end();
     // TODO : send digital signal to STM32 to indicate that the photos have been taken and saved to SD card
     esp_deep_sleep_start();
