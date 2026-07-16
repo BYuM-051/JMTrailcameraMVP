@@ -6,6 +6,9 @@
 #include "SD.h"
 #include "SPI.h"
 #include "WiFi.h"
+#include "HTTPClient.h"
+#include "WiFiClientSecure.h"
+#include "base64.h"
 
 #define CAMERA_MODEL_XIAO_ESP32S3 // Has PSRAM
 
@@ -14,7 +17,14 @@
 constexpr const char* wifiSSID = "LognSteam";
 constexpr const char* wifiPassword = "roboticsisfun!1";
 
+constexpr int wifiMaxRetries = 20; // NOTE : Set to 0 for infinite retries
+
 constexpr const char* postURL = "https://script.google.com/macros/s/AKfycbxoq4EkIb7f6GZVewrn-mSUFbtDmdHMZDknfIcomaxGKW3J3ULM_0GvvbNN824VHbABJA/exec";
+
+WiFiClientSecure client;
+HTTPClient http;
+
+constexpr const int STMPin = 2;
 
 #define _DEBUG_
 #ifdef _DEBUG_
@@ -31,9 +41,15 @@ constexpr const char* postURL = "https://script.google.com/macros/s/AKfycbxoq4Ek
 esp_err_t cameraInit();
 esp_err_t sdInit();
 esp_err_t wifiInit();
+esp_err_t stm32DigitalSignalInit();
+void setup();
+void loop();
 void photo_save(const char* fileName);
 void writeFile(fs::FS &fs, const char * path, uint8_t * data, size_t len);
+void cameraCapture();
 void cameraCaptureTask(void *pvParameters);
+String convertPhotoToBase64(int photoNumber);
+void wifiPostImage();
 void wifiPostImageTask(void* pvParameters);
 
 esp_err_t cameraInit()
@@ -133,23 +149,34 @@ esp_err_t sdInit()
     return ESP_OK;
 }
 
-constexpr int wifiMaxRetries = 20;
 esp_err_t wifiInit()
 {
+    WiFi.mode(WIFI_STA);
     WiFi.begin(wifiSSID, wifiPassword);
     printDebug("Connecting to WiFi");
     int retryCount = 0;
     while(WiFi.status() != WL_CONNECTED)
     {
         delay(500);
-        printDebug(".");
-        if(retryCount++ > wifiMaxRetries)
+        printDebug("Connecting : ");
+        printDebug(retryCount++);
+        #if wifiMaxRetries > 0
+        if(retryCount > wifiMaxRetries)
         {
             printDebug("Failed to connect to WiFi");
             return ESP_FAIL;
         }
+        #endif
     }
     printDebug("Connected to WiFi");
+
+    client.setInsecure(); // Disable SSL certificate verification
+    return ESP_OK;
+}
+
+esp_err_t stm32DigitalSignalInit()
+{
+    pinMode(STMPin, OUTPUT);
     return ESP_OK;
 }
 
@@ -195,6 +222,25 @@ void writeFile(fs::FS &fs, const char *path, uint8_t *data, size_t len)
     file.close();
 }
 
+String convertPhotoToBase64(int photoNumber)
+{
+    String filePath = "/Photo" + String(photoNumber) + ".jpg";
+    File file = SD.open(filePath);
+    if(!file)
+    {
+        printDebug("Failed to open file for reading");
+        return String();
+    }
+    size_t fileSize = file.size();
+    uint8_t* buffer = new uint8_t[fileSize];
+    file.read(buffer, fileSize);
+    file.close();
+
+    String base64String = base64::encode(buffer, fileSize);
+    delete[] buffer;
+    return base64String;
+}
+
 void setup() 
 {
     uartBegin(115200);
@@ -210,19 +256,29 @@ void setup()
         printDebug("Failed to initialize SD card");
         return;
     }
-
-    xTaskCreate(cameraCaptureTask, "cameraCaptureTask", 4096, NULL, 1, NULL);
+    if(stm32DigitalSignalInit() != ESP_OK)
+    {
+        printDebug("Failed to initialize STM32 digital signal");
+        return;
+    }
+    cameraCapture(); // Capture photos and save to SD card
+    // xTaskCreate(cameraCaptureTask, "cameraCaptureTask", 4096, NULL, 1, NULL);
 
     if(wifiInit() != ESP_OK)
     {
         printDebug("Failed to initialize WiFi");
         return;
     }
-
-    xTaskCreate(wifiPostImageTask, "wifiPostImageTask", 4096, NULL, 1, NULL);
+    wifiPostImage(); // Post images to server
+    // xTaskCreate(wifiPostImageTask, "wifiPostImageTask", 4096, NULL, 1, NULL);
 }
 
 void cameraCaptureTask(void *pvParameters)
+{
+    cameraCapture();
+    vTaskDelete(NULL); // Delete the task after completion
+}
+void cameraCapture()
 {
     printDebug("Camera Capture Task Started");
     // Capture photos and save to SD card
@@ -240,20 +296,59 @@ void cameraCaptureTask(void *pvParameters)
         photo_save(fileName);
         delay(10);
     }
-    vTaskDelete(NULL);
+    // vTaskDelete(NULL); // NOTE : Do not uncomment this. We don't use this function as RTOS Task 
 }
 
-void wifiPostImageTask(void* pvParameters)
+void wifiPostImageTask(void *pvParameters)
+{
+    wifiPostImage();
+    vTaskDelete(NULL); // Delete the task after completion
+}
+void wifiPostImage()
 {
     printDebug("WiFi Post Image Task Started");
 
+    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
     
+    http.begin(client, postURL);
+    http.addHeader("Content-Type", "application/json");
+    
+    for(int photoCount = 0 ; photoCount <= PHOTO_TO_CAPTURE ; photoCount++)
+    {
+        String base64Image = convertPhotoToBase64(photoCount);
+        if(base64Image == "")
+        {
+            printDebug("No image to post for photoCount: ");
+            printDebug(photoCount);
+            continue;
+        }
+
+        String jsonPayload = "{\"image\":\"" + base64Image + "\"}";
+
+        int httpResponseCode = http.POST(jsonPayload);
+        if(httpResponseCode > 0)
+        {
+            printDebug("HTTP Response code: ");
+            printDebug(httpResponseCode);
+        }
+        else
+        {
+            printDebug("Error on sending POST: ");
+            printDebug(httpResponseCode);
+        }
+
+
+    }
+    printDebug("All images posted to server");
+    client.stop();
+    http.end();
+
     SD.end();
-    // TODO : send digital signal to STM32 to indicate that the photos have been taken and saved to SD card
+    digitalWrite(STMPin, HIGH);
     esp_deep_sleep_start();
 }
 
 void loop() 
 {
-    delay(360000);
+    vTaskDelete(NULL); // Delete the loop task to prevent it from running indefinitely
 }
