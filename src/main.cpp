@@ -17,7 +17,7 @@
 constexpr const char* wifiSSID = "LognSteam";
 constexpr const char* wifiPassword = "roboticsisfun!1";
 
-constexpr int wifiMaxRetries = 20; // NOTE : Set to 0 for infinite retries
+constexpr int wifiMaxRetries = 0; // NOTE : Set to 0 for infinite retries
 
 constexpr const char* postURL = "https://script.google.com/macros/s/AKfycbxoq4EkIb7f6GZVewrn-mSUFbtDmdHMZDknfIcomaxGKW3J3ULM_0GvvbNN824VHbABJA/exec";
 
