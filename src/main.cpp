@@ -24,7 +24,8 @@ constexpr const char* postURL = "https://script.google.com/macros/s/AKfycbxoq4Ek
 WiFiClientSecure client;
 HTTPClient http;
 
-constexpr const int STMPin = 2;
+constexpr const int ToSTMPin = 5; // D4 as GPIO5
+constexpr const int FromSTMPin = 4; // D3 as GPIO4
 
 #define _DEBUG_
 #ifdef _DEBUG_
@@ -176,7 +177,9 @@ esp_err_t wifiInit()
 
 esp_err_t stm32DigitalSignalInit()
 {
-    pinMode(STMPin, OUTPUT);
+    pinMode(ToSTMPin, OUTPUT);
+    digitalWrite(ToSTMPin, LOW);
+    pinMode(FromSTMPin, INPUT);
     return ESP_OK;
 }
 
@@ -326,25 +329,34 @@ void wifiPostImage()
         String jsonPayload = "{\"image\":\"" + base64Image + "\"}";
 
         int httpResponseCode = http.POST(jsonPayload);
-        if(httpResponseCode > 0)
+        while(httpResponseCode != 200)
         {
-            printDebug("HTTP Response code: ");
-            printDebug(httpResponseCode);
-        }
-        else
-        {
-            printDebug("Error on sending POST: ");
-            printDebug(httpResponseCode);
+            if(httpResponseCode > 0)
+            {
+                printDebug("HTTP Response code: ");
+                printDebug(httpResponseCode);
+            }
+            else
+            {
+                printDebug("Error on sending POST: ");
+                printDebug(httpResponseCode);
+            }
+            httpResponseCode = http.POST(jsonPayload);
         }
 
+        //TODO : impelement delete buffer image from SD card after posting to server
+        //SD.remove("/Photo" + String(photoCount) + ".jpg"); // temporary delete code for testing
+        printDebug("Image posted to server for photoCount: ");
+        printDebug(photoCount);
 
+        //
     }
     printDebug("All images posted to server");
     client.stop();
     http.end();
 
     SD.end();
-    digitalWrite(STMPin, HIGH);
+    digitalWrite(ToSTMPin, HIGH);
     esp_deep_sleep_start();
 }
 
