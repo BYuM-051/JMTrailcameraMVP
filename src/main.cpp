@@ -16,8 +16,8 @@
 
 // NOTE : The following WiFi credentials are hardcoded for testing purposes. In a production environment, consider using a secure method to store and retrieve WiFi credentials, such as using a configuration file or secure storage.
 // #error "Configure WiFi credentials"
-constexpr const char* wifiSSID = "Lounge3(room)2.4";
-constexpr const char* wifiPassword = "#OZ14701470";
+constexpr const char* wifiSSID = "@ledetour_cafe2.4";
+constexpr const char* wifiPassword = "1234567890";
 
 // NOTE : Set to 0 for infinite retries
 constexpr int wifiMaxRetries = 0; 
@@ -41,6 +41,17 @@ constexpr const int FromSTMPin = 4; // D3 as GPIO4
 #else
     #define uartBegin(x)
     #define printDebug(x) 
+#endif
+
+#ifdef _DEBUG_
+    #define ceremonialBlink() digitalWrite(LEDPin, HIGH); \
+        delay(100); \
+        digitalWrite(LEDPin, LOW); \
+        delay(100); \
+        digitalWrite(LEDPin, HIGH);
+#else
+    #define ceremonialBlink()
+
 #endif
 
 #include "camera_pins.h"
@@ -261,11 +272,7 @@ void setup()
 
     // Initialize LED and ceremonial blink
     pinMode(LEDPin, OUTPUT);
-    digitalWrite(LEDPin, HIGH);
-    delay(100);
-    digitalWrite(LEDPin, LOW);
-    delay(100);
-    digitalWrite(LEDPin, HIGH);
+    ceremonialBlink();
 
     if(stm32DigitalSignalInit() != ESP_OK)
     {
@@ -318,6 +325,7 @@ void cameraCapture()
         }
         photo_save(fileName);
         delay(10);
+        ceremonialBlink();
     }
     // vTaskDelete(NULL); // NOTE : Do not uncomment this. We don't use this function as RTOS Task 
 }
@@ -365,7 +373,6 @@ void wifiPostImage()
         return;
     }
 
-    bool uploadedAny = false;
     File file = root.openNextFile();
     while(file)
     {
@@ -377,7 +384,6 @@ void wifiPostImage()
             if(lowerPath.endsWith(".jpg") || lowerPath.endsWith(".jpeg"))
             {
                 file.close();
-                uploadedAny = true;
 
                 String base64Image = convertPhotoToBase64(filePath);
                 if(base64Image.length() == 0)
@@ -388,7 +394,12 @@ void wifiPostImage()
                 }
                 else
                 {
-                    String jsonPayLoad = "{\"image\": \"" + base64Image + "\"}";
+                    //TODO : remove duplicate string algorithm to save mem
+                    String jsonPayLoad;
+                    jsonPayLoad.reserve(base64Image.length() + 50); // Reserve enough space for the JSON payload
+                    jsonPayLoad = "{\"image\":\"";
+                    jsonPayLoad += base64Image;
+                    jsonPayLoad += "\"}";
 
                     WiFiClientSecure execClient;
                     HTTPClient execHttp;
@@ -433,6 +444,21 @@ void wifiPostImage()
                         printDebug("Response: ");
                         printDebug(response);
                         printDebug("\n");
+                        ceremonialBlink();
+
+                        // TODO : Delete the file after successful post
+                        if(SD.remove(filePath))
+                        {
+                            printDebug("Deleted file: ");
+                            printDebug(filePath);
+                            printDebug("\n");
+                        }
+                        else
+                        {
+                            printDebug("Failed to delete file: ");
+                            printDebug(filePath);
+                            printDebug("\n");
+                        }
                     }
                     else
                     {
@@ -445,6 +471,7 @@ void wifiPostImage()
                     execHttp.end();
                     execClient.stop();
                 }
+
             }
             else
             {
@@ -456,13 +483,10 @@ void wifiPostImage()
 
     root.close();
 
-    if(!uploadedAny)
-    {
-        printDebug("No image files found on SD card\n");
-    }
     printDebug("All images posted to server\n");
     SD.end();
     digitalWrite(LEDPin, HIGH);
+    ceremonialBlink();
     digitalWrite(ToSTMPin, HIGH);
     esp_deep_sleep_start();
 }
