@@ -14,16 +14,18 @@
 
 #define PHOTO_TO_CAPTURE 5
 
+// NOTE : The following WiFi credentials are hardcoded for testing purposes. In a production environment, consider using a secure method to store and retrieve WiFi credentials, such as using a configuration file or secure storage.
 // #error "Configure WiFi credentials"
-constexpr const char* wifiSSID = "LognSteam";
-constexpr const char* wifiPassword = "roboticsisfun!1";
+constexpr const char* wifiSSID = "Lounge3(room)2.4";
+constexpr const char* wifiPassword = "#OZ14701470";
 
-constexpr int wifiMaxRetries = 0; // NOTE : Set to 0 for infinite retries
+// NOTE : Set to 0 for infinite retries
+constexpr int wifiMaxRetries = 0; 
 
-constexpr const char* postURL = "https://script.google.com/macros/s/AKfycbxoq4EkIb7f6GZVewrn-mSUFbtDmdHMZDknfIcomaxGKW3J3ULM_0GvvbNN824VHbABJA/exec";
+const char* postURL = "https://script.google.com/macros/s/AKfycbxoq4EkIb7f6GZVewrn-mSUFbtDmdHMZDknfIcomaxGKW3J3ULM_0GvvbNN824VHbABJA/exec";
 
-WiFiClientSecure client;
-HTTPClient http;
+// WiFiClientSecure client;
+// HTTPClient http;
 
 constexpr const int LEDPin = 21; // GPIO21 Integrated LED Pin
 constexpr const int ToSTMPin = 5; // D4 as GPIO5
@@ -53,6 +55,7 @@ void cameraCapture();
 void cameraCaptureTask(void *pvParameters);
 String convertPhotoToBase64(int photoNumber);
 void wifiPostImage();
+void wifiPostTestWithLightData();
 void wifiPostImageTask(void* pvParameters);
 
 esp_err_t cameraInit()
@@ -173,7 +176,7 @@ esp_err_t wifiInit()
     }
     printDebug("Connected to WiFi");
 
-    client.setInsecure(); // Disable SSL certificate verification
+    // client.setInsecure(); // Disable SSL certificate verification
     return ESP_OK;
 }
 
@@ -266,7 +269,7 @@ void setup()
         printDebug("Failed to initialize STM32 digital signal");
         return;
     }
-    
+
     if(cameraInit() != ESP_OK)
     {
         printDebug("Failed to initialize camera");
@@ -286,6 +289,7 @@ void setup()
     //     return;
     // }
     wifiPostImage(); // Post images to server
+    // wifiPostTestWithLightData(); // Post images to server
     // xTaskCreate(wifiPostImageTask, "wifiPostImageTask", 4096, NULL, 1, NULL);
 }
 
@@ -320,8 +324,13 @@ void wifiPostImageTask(void *pvParameters)
     wifiPostImage();
     vTaskDelete(NULL); // Delete the task after completion
 }
+void wifiPostTestWithLightData()
+{
+
+}
 void wifiPostImage()
 {
+    // Initialize WiFi connection
     WiFi.mode(WIFI_STA);
     WiFi.begin(wifiSSID, wifiPassword);
     printDebug("Connecting to WiFi");
@@ -329,8 +338,7 @@ void wifiPostImage()
     while(WiFi.status() != WL_CONNECTED)
     {
         delay(500);
-        printDebug("Connecting : ");
-        printDebug(retryCount++);
+        printDebug(".");
         #if wifiMaxRetries > 0
         if(retryCount > wifiMaxRetries)
         {
@@ -340,87 +348,62 @@ void wifiPostImage()
         #endif
     }
     printDebug("Connected to WiFi");
+    
+    //TODO : make a loop to upload all images in the SD card to the server
+    //NOTE : from here
+    String jsonPayLoad = "{\"image\": \"" + convertPhotoToBase64(0) + "\"}";
 
-    client.setInsecure(); // Disable SSL certificate verification
-    delay(100); 
+    WiFiClientSecure execClient;
+    HTTPClient execHttp;
+
+    execClient.setInsecure(); // Disable SSL certificate verification
 
     printDebug("WiFi Post Image Task Started");
 
-    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+    execHttp.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
     
-    http.begin(client, postURL);
-    http.addHeader("Content-Type", "application/json");
-    
-    for(int photoCount = 0 ; photoCount <= 0 ; photoCount++)
+    execHttp.begin(execClient, String(postURL));
+    execHttp.addHeader("Content-Type", "application/json");
+    execHttp.addHeader("Accept", "*/*");
+    execHttp.addHeader("Connection", "close");
+    const char* headerKeys[] = {"Location"};
+    execHttp.collectHeaders(headerKeys, 1);
+
+    int httpResponseCodeProbe = execHttp.POST(jsonPayLoad);
+
+    String redirectLocation = execHttp.header("Location");
+    printDebug("HTTP Response code [REDIRECT PROBE] : ");
+    printDebug(httpResponseCodeProbe);
+    printDebug("\n");
+    printDebug("Redirect Location: ");
+    printDebug(redirectLocation);
+    printDebug("\n");
+
+    WiFiClientSecure echoClient;
+    HTTPClient echoHttp;
+
+    echoClient.setInsecure(); // Disable SSL certificate verification
+    echoHttp.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
+
+    echoHttp.begin(echoClient, redirectLocation);
+    echoHttp.addHeader("Content-Type", "application/json");
+    if(echoHttp.GET() == HTTP_CODE_OK)
     {
-        String base64Image = convertPhotoToBase64(photoCount);
-        if(base64Image == "")
-        {
-            printDebug("No image to post for photoCount: ");
-            printDebug(photoCount);
-            continue;
-        }
-
-        String jsonPayload = "{\"image\":\"" + base64Image + "\"}";
-        printDebug("Image size : ");
-        printDebug(" bytes\n");
-
-        printDebug("Base64 size : ");
-        printDebug(base64Image.length());
-        printDebug(" bytes\n");
-
-        printDebug("JSON size : ");
-        printDebug(jsonPayload.length());
-        printDebug(" bytes\n");
-
-        int httpResponseCode = http.POST(jsonPayload);
-        printDebug(http.getString());
+        printDebug("Image posted successfully");
+        String response = echoHttp.getString();
+        printDebug("Response: ");
+        printDebug(response);
         printDebug("\n");
-        //NOTE : idk but google script app returns 400 (perhaps due to redirect?)
-        printDebug("HTTP Response code [LOCAL] : ");
-        printDebug(httpResponseCode);
-        printDebug("\n");
-        /*
-        while(httpResponseCode != 200 && httpResponseCode != 400)
-        {
-            if(httpResponseCode > 0)
-            {
-                printDebug("HTTP Response code [ONLINE] : ");
-                printDebug(httpResponseCode);
-                printDebug("\n");
-            }
-            else
-            {
-                printDebug("HTTP Response code [LOCAL] : ");
-                printDebug(httpResponseCode);
-                printDebug("\n");
-            }
-            httpResponseCode = http.POST(jsonPayload);
- 
-        }
-        */
-        //TODO : impelement delete buffer image from SD card after posting to serv
-        //SD.remove("/Photo" + String(photoCount) + ".jpg"); // temporary delete code for testing
-        printDebug("Image posted to server for photoCount: ");
-        printDebug(photoCount);
-
-        http.end();
-        http.begin(client, postURL);
-        http.addHeader("Content-Type", "application/json");
-        http.POST("{\"image\":\"abc\"}");
-        printDebug(http.getString());
-        printDebug("\n");
-        //NOTE : idk but google script app returns 400 (perhaps due to redirect?)
-        printDebug("HTTP Response code [LOCAL] : ");
-        printDebug(httpResponseCode);
-        printDebug("\n");
-
-        //
     }
+    else
+    {
+        printDebug("Failed to post image");
+    }
+    
+    echoClient.stop();
+    echoHttp.end();
+    //NOTE : to here
     printDebug("All images posted to server");
-    client.stop();
-    http.end();
-
     SD.end();
     digitalWrite(LEDPin, HIGH);
     digitalWrite(ToSTMPin, HIGH);
