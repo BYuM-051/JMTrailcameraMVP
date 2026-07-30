@@ -14,6 +14,7 @@
 
 #define PHOTO_TO_CAPTURE 5
 
+// #error "Configure WiFi credentials"
 constexpr const char* wifiSSID = "LognSteam";
 constexpr const char* wifiPassword = "roboticsisfun!1";
 
@@ -24,6 +25,7 @@ constexpr const char* postURL = "https://script.google.com/macros/s/AKfycbxoq4Ek
 WiFiClientSecure client;
 HTTPClient http;
 
+constexpr const int LEDPin = 21; // GPIO21 Integrated LED Pin
 constexpr const int ToSTMPin = 5; // D4 as GPIO5
 constexpr const int FromSTMPin = 4; // D3 as GPIO4
 
@@ -199,14 +201,15 @@ void photo_save(const char* fileName)
     // Release image buffer
     esp_camera_fb_return(fb);
     printDebug("Photo saved to file");
+    printDebug("\n");
 }
 
 // SD card write file
 void writeFile(fs::FS &fs, const char *path, uint8_t *data, size_t len)
 {
-    printDebug("Writing file: ");
+    printDebug("Writing file at : ");
     printDebug(path);
-    printDebug("\n");
+    printDebug("\t");
 
     File file = fs.open(path, FILE_WRITE);
     if(!file)
@@ -223,6 +226,7 @@ void writeFile(fs::FS &fs, const char *path, uint8_t *data, size_t len)
         printDebug("Write failed");
     }
     file.close();
+    printDebug("\t");
 }
 
 String convertPhotoToBase64(int photoNumber)
@@ -249,6 +253,20 @@ void setup()
     uartBegin(115200);
     printDebug("SETUP METHOD");
 
+    // Initialize LED and ceremonial blink
+    pinMode(LEDPin, OUTPUT);
+    digitalWrite(LEDPin, HIGH);
+    delay(100);
+    digitalWrite(LEDPin, LOW);
+    delay(100);
+    digitalWrite(LEDPin, HIGH);
+
+    if(stm32DigitalSignalInit() != ESP_OK)
+    {
+        printDebug("Failed to initialize STM32 digital signal");
+        return;
+    }
+    
     if(cameraInit() != ESP_OK)
     {
         printDebug("Failed to initialize camera");
@@ -259,19 +277,14 @@ void setup()
         printDebug("Failed to initialize SD card");
         return;
     }
-    if(stm32DigitalSignalInit() != ESP_OK)
-    {
-        printDebug("Failed to initialize STM32 digital signal");
-        return;
-    }
     cameraCapture(); // Capture photos and save to SD card
     // xTaskCreate(cameraCaptureTask, "cameraCaptureTask", 4096, NULL, 1, NULL);
 
-    if(wifiInit() != ESP_OK)
-    {
-        printDebug("Failed to initialize WiFi");
-        return;
-    }
+    // if(wifiInit() != ESP_OK)
+    // {
+    //     printDebug("Failed to initialize WiFi");
+    //     return;
+    // }
     wifiPostImage(); // Post images to server
     // xTaskCreate(wifiPostImageTask, "wifiPostImageTask", 4096, NULL, 1, NULL);
 }
@@ -309,6 +322,28 @@ void wifiPostImageTask(void *pvParameters)
 }
 void wifiPostImage()
 {
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(wifiSSID, wifiPassword);
+    printDebug("Connecting to WiFi");
+    int retryCount = 0;
+    while(WiFi.status() != WL_CONNECTED)
+    {
+        delay(500);
+        printDebug("Connecting : ");
+        printDebug(retryCount++);
+        #if wifiMaxRetries > 0
+        if(retryCount > wifiMaxRetries)
+        {
+            printDebug("Failed to connect to WiFi");
+            return ESP_FAIL;
+        }
+        #endif
+    }
+    printDebug("Connected to WiFi");
+
+    client.setInsecure(); // Disable SSL certificate verification
+    delay(100); 
+
     printDebug("WiFi Post Image Task Started");
 
     http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
@@ -316,7 +351,7 @@ void wifiPostImage()
     http.begin(client, postURL);
     http.addHeader("Content-Type", "application/json");
     
-    for(int photoCount = 0 ; photoCount <= PHOTO_TO_CAPTURE ; photoCount++)
+    for(int photoCount = 0 ; photoCount <= 0 ; photoCount++)
     {
         String base64Image = convertPhotoToBase64(photoCount);
         if(base64Image == "")
@@ -327,27 +362,58 @@ void wifiPostImage()
         }
 
         String jsonPayload = "{\"image\":\"" + base64Image + "\"}";
+        printDebug("Image size : ");
+        printDebug(" bytes\n");
+
+        printDebug("Base64 size : ");
+        printDebug(base64Image.length());
+        printDebug(" bytes\n");
+
+        printDebug("JSON size : ");
+        printDebug(jsonPayload.length());
+        printDebug(" bytes\n");
 
         int httpResponseCode = http.POST(jsonPayload);
-        while(httpResponseCode != 200)
+        printDebug(http.getString());
+        printDebug("\n");
+        //NOTE : idk but google script app returns 400 (perhaps due to redirect?)
+        printDebug("HTTP Response code [LOCAL] : ");
+        printDebug(httpResponseCode);
+        printDebug("\n");
+        /*
+        while(httpResponseCode != 200 && httpResponseCode != 400)
         {
             if(httpResponseCode > 0)
             {
-                printDebug("HTTP Response code: ");
+                printDebug("HTTP Response code [ONLINE] : ");
                 printDebug(httpResponseCode);
+                printDebug("\n");
             }
             else
             {
-                printDebug("Error on sending POST: ");
+                printDebug("HTTP Response code [LOCAL] : ");
                 printDebug(httpResponseCode);
+                printDebug("\n");
             }
             httpResponseCode = http.POST(jsonPayload);
+ 
         }
-
-        //TODO : impelement delete buffer image from SD card after posting to server
+        */
+        //TODO : impelement delete buffer image from SD card after posting to serv
         //SD.remove("/Photo" + String(photoCount) + ".jpg"); // temporary delete code for testing
         printDebug("Image posted to server for photoCount: ");
         printDebug(photoCount);
+
+        http.end();
+        http.begin(client, postURL);
+        http.addHeader("Content-Type", "application/json");
+        http.POST("{\"image\":\"abc\"}");
+        printDebug(http.getString());
+        printDebug("\n");
+        //NOTE : idk but google script app returns 400 (perhaps due to redirect?)
+        printDebug("HTTP Response code [LOCAL] : ");
+        printDebug(httpResponseCode);
+        printDebug("\n");
 
         //
     }
@@ -356,6 +422,7 @@ void wifiPostImage()
     http.end();
 
     SD.end();
+    digitalWrite(LEDPin, HIGH);
     digitalWrite(ToSTMPin, HIGH);
     esp_deep_sleep_start();
 }
