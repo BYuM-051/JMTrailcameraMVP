@@ -31,6 +31,8 @@ constexpr const int LEDPin = 21; // GPIO21 Integrated LED Pin
 constexpr const int ToSTMPin = 5; // D4 as GPIO5
 constexpr const int FromSTMPin = 4; // D3 as GPIO4
 
+// NOTE : Disable this _DEBUG_ macro for production environment to avoid permanent serial yeild.
+// #error "Disable _DEBUG_ macro for production environment"
 #define _DEBUG_
 #ifdef _DEBUG_
     #define uartBegin(x) Serial.begin(x); \
@@ -53,7 +55,7 @@ void photo_save(const char* fileName);
 void writeFile(fs::FS &fs, const char * path, uint8_t * data, size_t len);
 void cameraCapture();
 void cameraCaptureTask(void *pvParameters);
-String convertPhotoToBase64(int photoNumber);
+String convertPhotoToBase64(const String &filePath);
 void wifiPostImage();
 void wifiPostTestWithLightData();
 void wifiPostImageTask(void* pvParameters);
@@ -232,13 +234,14 @@ void writeFile(fs::FS &fs, const char *path, uint8_t *data, size_t len)
     printDebug("\t");
 }
 
-String convertPhotoToBase64(int photoNumber)
+String convertPhotoToBase64(const String &filePath)
 {
-    String filePath = "/Photo" + String(photoNumber) + ".jpg";
     File file = SD.open(filePath);
     if(!file)
     {
-        printDebug("Failed to open file for reading");
+        printDebug("Failed to open file for reading: ");
+        printDebug(filePath);
+        printDebug("\n");
         return String();
     }
     size_t fileSize = file.size();
@@ -246,7 +249,7 @@ String convertPhotoToBase64(int photoNumber)
     file.read(buffer, fileSize);
     file.close();
 
-    String base64String = base64::encode(buffer, fileSize);
+    String base64String = base64::encode(buffer, fileSize) + String("\0");
     delete[] buffer;
     return base64String;
 }
@@ -348,62 +351,116 @@ void wifiPostImage()
         #endif
     }
     printDebug("Connected to WiFi");
-    
-    //TODO : make a loop to upload all images in the SD card to the server
-    //NOTE : from here
-    String jsonPayLoad = "{\"image\": \"" + convertPhotoToBase64(0) + "\"}";
 
-    WiFiClientSecure execClient;
-    HTTPClient execHttp;
-
-    execClient.setInsecure(); // Disable SSL certificate verification
-
-    printDebug("WiFi Post Image Task Started");
-
-    execHttp.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
-    
-    execHttp.begin(execClient, String(postURL));
-    execHttp.addHeader("Content-Type", "application/json");
-    execHttp.addHeader("Accept", "*/*");
-    execHttp.addHeader("Connection", "close");
-    const char* headerKeys[] = {"Location"};
-    execHttp.collectHeaders(headerKeys, 1);
-
-    int httpResponseCodeProbe = execHttp.POST(jsonPayLoad);
-
-    String redirectLocation = execHttp.header("Location");
-    printDebug("HTTP Response code [REDIRECT PROBE] : ");
-    printDebug(httpResponseCodeProbe);
-    printDebug("\n");
-    printDebug("Redirect Location: ");
-    printDebug(redirectLocation);
-    printDebug("\n");
-
-    WiFiClientSecure echoClient;
-    HTTPClient echoHttp;
-
-    echoClient.setInsecure(); // Disable SSL certificate verification
-    echoHttp.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
-
-    echoHttp.begin(echoClient, redirectLocation);
-    echoHttp.addHeader("Content-Type", "application/json");
-    if(echoHttp.GET() == HTTP_CODE_OK)
+    File root = SD.open("/");
+    if(!root)
     {
-        printDebug("Image posted successfully");
-        String response = echoHttp.getString();
-        printDebug("Response: ");
-        printDebug(response);
-        printDebug("\n");
+        printDebug("Failed to open SD root");
+        return;
     }
-    else
+    if(!root.isDirectory())
     {
-        printDebug("Failed to post image");
+        printDebug("SD root is not a directory");
+        root.close();
+        return;
     }
-    
-    echoClient.stop();
-    echoHttp.end();
-    //NOTE : to here
-    printDebug("All images posted to server");
+
+    bool uploadedAny = false;
+    File file = root.openNextFile();
+    while(file)
+    {
+        if(!file.isDirectory())
+        {
+            String filePath = String("/") + String(file.name());
+            String lowerPath = filePath;
+            lowerPath.toLowerCase();
+            if(lowerPath.endsWith(".jpg") || lowerPath.endsWith(".jpeg"))
+            {
+                file.close();
+                uploadedAny = true;
+
+                String base64Image = convertPhotoToBase64(filePath);
+                if(base64Image.length() == 0)
+                {
+                    printDebug("Skipped empty file: ");
+                    printDebug(filePath);
+                    printDebug("\n");
+                }
+                else
+                {
+                    String jsonPayLoad = "{\"image\": \"" + base64Image + "\"}";
+
+                    WiFiClientSecure execClient;
+                    HTTPClient execHttp;
+                    execClient.setInsecure();
+
+                    printDebug("Posting image: ");
+                    printDebug(filePath);
+                    printDebug("\n");
+
+                    execHttp.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
+                    execHttp.begin(execClient, String(postURL));
+                    execHttp.addHeader("Content-Type", "application/json");
+                    execHttp.addHeader("Accept", "*/*");
+                    execHttp.addHeader("Connection", "close");
+                    const char* headerKeys[] = {"Location"};
+                    execHttp.collectHeaders(headerKeys, 1);
+
+                    int execHttpResponse = execHttp.POST(jsonPayLoad);
+                    printDebug("HTTP Response code [EXEC] : ");
+                    printDebug(execHttpResponse);
+                    printDebug("\n");
+
+                    String redirectLocation = execHttp.header("Location");
+                    printDebug("Redirect Location: ");
+                    printDebug(redirectLocation);
+                    printDebug("\n");
+
+                    WiFiClientSecure echoClient;
+                    HTTPClient echoHttp;
+                    echoClient.setInsecure();
+                    echoHttp.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
+                    echoHttp.begin(echoClient, redirectLocation);
+                    echoHttp.addHeader("Content-Type", "application/json");
+
+                    int echoHttpResponse = echoHttp.GET();
+                    printDebug("HTTP Response code [ECHO] : ");
+                    printDebug(echoHttpResponse);
+                    if(echoHttpResponse == HTTP_CODE_OK)
+                    {
+                        printDebug("Image posted successfully\n");
+                        String response = echoHttp.getString();
+                        printDebug("Response: ");
+                        printDebug(response);
+                        printDebug("\n");
+                    }
+                    else
+                    {
+                        printDebug("Redirect GET failed.");
+                        printDebug("\n");
+                    }
+
+                    echoHttp.end();
+                    echoClient.stop();
+                    execHttp.end();
+                    execClient.stop();
+                }
+            }
+            else
+            {
+                file.close();
+            }
+        }
+        file = root.openNextFile();
+    }
+
+    root.close();
+
+    if(!uploadedAny)
+    {
+        printDebug("No image files found on SD card\n");
+    }
+    printDebug("All images posted to server\n");
     SD.end();
     digitalWrite(LEDPin, HIGH);
     digitalWrite(ToSTMPin, HIGH);
