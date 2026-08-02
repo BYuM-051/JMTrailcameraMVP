@@ -20,10 +20,14 @@ constexpr const char* wifiSSID = "@ledetour_cafe2.4";
 constexpr const char* wifiPassword = "1234567890";
 
 // NOTE : Set to 0 for infinite retries
-constexpr int wifiMaxRetries = 0; 
+constexpr int wifiMaxRetries = 0;
+constexpr int postMaxRetrues = 0;
 
 const char* postURL = "https://script.google.com/macros/s/AKfycbxoq4EkIb7f6GZVewrn-mSUFbtDmdHMZDknfIcomaxGKW3J3ULM_0GvvbNN824VHbABJA/exec";
 
+volatile bool isWiFiReady = false;
+volatile bool isCameraReadyToCapture = false;
+volatile bool isBoardReadyToSleep = false;
 // WiFiClientSecure client;
 // HTTPClient http;
 
@@ -165,11 +169,13 @@ esp_err_t sdInit()
         printDebug("UNKNOWN");
         return ESP_FAIL;
     }
+    printDebug("\n");
     return ESP_OK;
 }
 
 esp_err_t wifiInit()
 {
+    // Initialize WiFi connection
     WiFi.mode(WIFI_STA);
     WiFi.begin(wifiSSID, wifiPassword);
     printDebug("Connecting to WiFi");
@@ -177,8 +183,7 @@ esp_err_t wifiInit()
     while(WiFi.status() != WL_CONNECTED)
     {
         delay(500);
-        printDebug("Connecting : ");
-        printDebug(retryCount++);
+        printDebug(".");
         #if wifiMaxRetries > 0
         if(retryCount > wifiMaxRetries)
         {
@@ -187,9 +192,8 @@ esp_err_t wifiInit()
         }
         #endif
     }
-    printDebug("Connected to WiFi");
+    printDebug("! OK!\n");
 
-    // client.setInsecure(); // Disable SSL certificate verification
     return ESP_OK;
 }
 
@@ -267,8 +271,12 @@ String convertPhotoToBase64(const String &filePath)
 
 void setup() 
 {
+    // xTaskCreate(cameraCaptureTask, "cameraCaptureTask", 4096, NULL, 1, NULL);
+    // xTaskCreate(wifiPostImageTask, "wifiPostImageTask", 4096, NULL, 1, NULL);
+
     uartBegin(115200);
     printDebug("SETUP METHOD");
+    printDebug("\t");
 
     // Initialize LED and ceremonial blink
     pinMode(LEDPin, OUTPUT);
@@ -279,32 +287,69 @@ void setup()
         printDebug("Failed to initialize STM32 digital signal");
         return;
     }
+    else
+    {
+        printDebug("STM32 digital signal initialized");
+        printDebug("\n");
+    }
 
     if(cameraInit() != ESP_OK)
     {
         printDebug("Failed to initialize camera");
         return;
     }
+    else
+    {
+        printDebug("Camera initialized");
+        printDebug("\n");
+    }
     if(sdInit() != ESP_OK)
     {
         printDebug("Failed to initialize SD card");
         return;
     }
-    cameraCapture(); // Capture photos and save to SD card
-    // xTaskCreate(cameraCaptureTask, "cameraCaptureTask", 4096, NULL, 1, NULL);
+    else
+    {
+        printDebug("SD card initialized");
+        printDebug("\n");
+    }
+    isCameraReadyToCapture = true;
+    if(wifiInit() != ESP_OK)
+    {
+        printDebug("Failed to initialize WiFi");
+        return;
+    }
+    else
+    {
+        printDebug("WiFi initialized");
+        printDebug("\n");
+    }
+    isWiFiReady = true;
+    printDebug("Setup complete");
+    printDebug("\n");
 
-    // if(wifiInit() != ESP_OK)
-    // {
-    //     printDebug("Failed to initialize WiFi");
-    //     return;
-    // }
+    // TODO : refactor these code with multi-thread
+    cameraCapture(); // Capture photos and save to SD card
     wifiPostImage(); // Post images to server
-    // wifiPostTestWithLightData(); // Post images to server
-    // xTaskCreate(wifiPostImageTask, "wifiPostImageTask", 4096, NULL, 1, NULL);
+
+    while(!isBoardReadyToSleep)
+    {
+        // TODO : add Yeild till board is ready to sleep
+        delay(50);
+    }
+    SD.end();
+    ceremonialBlink();
+    digitalWrite(ToSTMPin, HIGH);
+    esp_deep_sleep_start();
 }
 
 void cameraCaptureTask(void *pvParameters)
 {
+    while(!isCameraReadyToCapture)
+    {
+        // TODO : add Yeild till camera is ready to capture
+        delay(50);
+    }
     cameraCapture();
     vTaskDelete(NULL); // Delete the task after completion
 }
@@ -332,34 +377,16 @@ void cameraCapture()
 
 void wifiPostImageTask(void *pvParameters)
 {
+    while(!isWiFiReady)
+    {
+        // TODO : add Yeild till wifi is connected
+        delay(50);
+    }
     wifiPostImage();
     vTaskDelete(NULL); // Delete the task after completion
 }
-void wifiPostTestWithLightData()
-{
-
-}
 void wifiPostImage()
 {
-    // Initialize WiFi connection
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(wifiSSID, wifiPassword);
-    printDebug("Connecting to WiFi");
-    int retryCount = 0;
-    while(WiFi.status() != WL_CONNECTED)
-    {
-        delay(500);
-        printDebug(".");
-        #if wifiMaxRetries > 0
-        if(retryCount > wifiMaxRetries)
-        {
-            printDebug("Failed to connect to WiFi");
-            return ESP_FAIL;
-        }
-        #endif
-    }
-    printDebug("Connected to WiFi");
-
     File root = SD.open("/");
     if(!root)
     {
@@ -404,24 +431,35 @@ void wifiPostImage()
                     WiFiClientSecure execClient;
                     HTTPClient execHttp;
                     execClient.setInsecure();
+                    int execHttpResponse;
+                    int postRetries = 0;
+                    do
+                    {
+                        printDebug("Posting image: ");
+                        printDebug(filePath);
+                        printDebug("\n");
 
-                    printDebug("Posting image: ");
-                    printDebug(filePath);
-                    printDebug("\n");
+                        execHttp.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
+                        execHttp.begin(execClient, String(postURL));
+                        execHttp.addHeader("Content-Type", "application/json");
+                        execHttp.addHeader("Accept", "*/*");
+                        execHttp.addHeader("Connection", "close");
+                        const char* headerKeys[] = {"Location"};
+                        execHttp.collectHeaders(headerKeys, 1);
 
-                    execHttp.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
-                    execHttp.begin(execClient, String(postURL));
-                    execHttp.addHeader("Content-Type", "application/json");
-                    execHttp.addHeader("Accept", "*/*");
-                    execHttp.addHeader("Connection", "close");
-                    const char* headerKeys[] = {"Location"};
-                    execHttp.collectHeaders(headerKeys, 1);
-
-                    int execHttpResponse = execHttp.POST(jsonPayLoad);
-                    printDebug("HTTP Response code [EXEC] : ");
-                    printDebug(execHttpResponse);
-                    printDebug("\n");
-
+                        execHttpResponse = execHttp.POST(jsonPayLoad);
+                        printDebug("HTTP Response code [EXEC] : ");
+                        printDebug(execHttpResponse);
+                        printDebug("\n");
+                        #if postMaxRetrues > 0
+                        if(++postRetries >= PostMaxRetrues)
+                        {
+                            isBoardReadyToSleep = true;
+                            return;
+                        }
+                        #endif
+                    } while(execHttpResponse != 302);
+                    
                     String redirectLocation = execHttp.header("Location");
                     printDebug("Redirect Location: ");
                     printDebug(redirectLocation);
@@ -446,7 +484,6 @@ void wifiPostImage()
                         printDebug("\n");
                         ceremonialBlink();
 
-                        // TODO : Delete the file after successful post
                         if(SD.remove(filePath))
                         {
                             printDebug("Deleted file: ");
@@ -484,11 +521,7 @@ void wifiPostImage()
     root.close();
 
     printDebug("All images posted to server\n");
-    SD.end();
-    digitalWrite(LEDPin, HIGH);
-    ceremonialBlink();
-    digitalWrite(ToSTMPin, HIGH);
-    esp_deep_sleep_start();
+    isBoardReadyToSleep = true;
 }
 
 void loop() 
