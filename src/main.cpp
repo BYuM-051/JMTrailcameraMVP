@@ -16,12 +16,12 @@
 
 // NOTE : The following WiFi credentials are hardcoded for testing purposes. In a production environment, consider using a secure method to store and retrieve WiFi credentials, such as using a configuration file or secure storage.
 // #error "Configure WiFi credentials"
-constexpr const char* wifiSSID = "@ledetour_cafe2.4";
-constexpr const char* wifiPassword = "1234567890";
+constexpr const char* WiFiSSID = "@ledetour_cafe2.4";
+constexpr const char* WiFiPassword = "1234567890";
 
 // NOTE : Set to 0 for infinite retries
-constexpr int wifiMaxRetries = 0;
-constexpr int postMaxRetrues = 0;
+constexpr int WiFiMaxRetries = 0;
+constexpr int PostMaxRetrues = 0;
 
 const char* postURL = "https://script.google.com/macros/s/AKfycbxoq4EkIb7f6GZVewrn-mSUFbtDmdHMZDknfIcomaxGKW3J3ULM_0GvvbNN824VHbABJA/exec";
 
@@ -106,11 +106,12 @@ esp_err_t cameraInit()
 
     // if PSRAM IC present, init with UXGA resolution and higher JPEG quality
     //                      for larger pre-allocated frame buffer.
+    #define CAMERA_JPEG_QUALITY 5
     if(config.pixel_format == PIXFORMAT_JPEG)
     {
         if(psramFound())
         {
-            config.jpeg_quality = 10;
+            config.jpeg_quality = CAMERA_JPEG_QUALITY;
             config.fb_count = 2;
             config.grab_mode = CAMERA_GRAB_LATEST;
         } 
@@ -177,15 +178,15 @@ esp_err_t wifiInit()
 {
     // Initialize WiFi connection
     WiFi.mode(WIFI_STA);
-    WiFi.begin(wifiSSID, wifiPassword);
+    WiFi.begin(WiFiSSID, WiFiPassword);
     printDebug("Connecting to WiFi");
     int retryCount = 0;
     while(WiFi.status() != WL_CONNECTED)
     {
         delay(500);
         printDebug(".");
-        #if wifiMaxRetries > 0
-        if(retryCount > wifiMaxRetries)
+        #if WiFiMaxRetries > 0
+        if(retryCount > WiFiMaxRetries)
         {
             printDebug("Failed to connect to WiFi");
             return ESP_FAIL;
@@ -451,7 +452,7 @@ void wifiPostImage()
                         printDebug("HTTP Response code [EXEC] : ");
                         printDebug(execHttpResponse);
                         printDebug("\n");
-                        #if postMaxRetrues > 0
+                        #if PostMaxRetrues > 0
                         if(++postRetries >= PostMaxRetrues)
                         {
                             isBoardReadyToSleep = true;
