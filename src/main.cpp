@@ -16,8 +16,8 @@
 
 // NOTE : The following WiFi credentials are hardcoded for testing purposes. In a production environment, consider using a secure method to store and retrieve WiFi credentials, such as using a configuration file or secure storage.
 // #error "Configure WiFi credentials"
-constexpr const char* WiFiSSID = "@ledetour_cafe2.4";
-constexpr const char* WiFiPassword = "1234567890";
+constexpr const char* WiFiSSID = "4G-UFI-0827";
+constexpr const char* WiFiPassword = "1234567f890";
 
 // NOTE : Set to 0 for infinite retries
 constexpr int WiFiMaxRetries = 0;
@@ -37,7 +37,7 @@ constexpr const int FromSTMPin = 4; // D3 as GPIO4
 
 // NOTE : Disable this _DEBUG_ macro for production environment to avoid permanent serial yeild.
 // #error "Disable _DEBUG_ macro for production environment"
-#define _DEBUG_
+// #define _DEBUG_
 #ifdef _DEBUG_
     #define uartBegin(x) Serial.begin(x); \
         while(!Serial) {delay(100);}
